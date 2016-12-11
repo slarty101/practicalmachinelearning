@@ -6,25 +6,161 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
 ```
 
-## R Markdown
+### 1.Summary
+In this report we train several models to predict Human Activity Recognition (HAR) using the Weightlifting Exercises datatset. We subset the training dataset into training, testing and validation sets and train three models. We select the best performing model, a Generalised Boosting Regression model and measure this against the validation dataset. 
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+### 2.Introduction
+Taken from the [study site](http://groupware.les.inf.puc-rio.br/har)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+> "This human activity recognition research has traditionally focused on discriminating between different activities, i.e. to predict "which" activity was performed at a specific point in time (like with the Daily Living Activities dataset above). The approach we propose for the Weight Lifting Exercises dataset is to investigate "how (well)" an activity was performed by the wearer. The "how (well)" investigation has only received little attention so far, even though it potentially provides useful information for a large variety of applications,such as sports training.
+In this work (see the paper) we first define quality of execution and investigate three aspects that pertain to qualitative activity recognition: the problem of specifying correct execution, the automatic and robust detection of execution mistakes, and how to provide feedback on the quality of execution to the user. We tried out an on-body sensing approach (dataset here), but also an "ambient sensing approach" (by using Microsoft Kinect - dataset still unavailable)
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+Read more at the [website](http://groupware.les.inf.puc-rio.br/har#ixzz4SS0zsOas)" 
 
-```{r cars}
-summary(cars)
+### 3.Data Loading and Cleansing
+```{r load libraries, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(caret)
+library(doMC)
+``` 
+The dataset is from "Qualitative Activity Recognition of Weight Lifting Exercises" Velloso et al (2013) available [here]( http://groupware.les.inf.puc-rio.br/static/WLE/WearableComputing_weight_lifting_exercises_biceps_curl_variations.csv).
+
+```{r data load, echo=TRUE, results=TRUE}
+
+data <-read.csv("pml-training.csv", header=TRUE, stringsAsFactors = FALSE)
+
+dim(data)
+```
+As we can see this is quite a large dataset with 19622 rows in 160 columns. Looking through the data we can see there are a number of variables with no data and several with only small amounts of data. These we remove to give us a working dataset of 19622 rows in 56 columns.
+
+```{r data cleaning, echo=TRUE, results=TRUE}
+
+
+colls2go <- which(colSums(is.na(data))>2)
+
+data_red <- data[,-c(colls2go)]
+
+data_red2 <- data_red[, -c(3,4,6,7,12:20, 43:48,52:60,74:82)]
+
 ```
 
-## Including Plots
+### 4.Data Splitting
 
-You can also embed plots, for example:
+Next we partition our reduced dataset into training, test and validation subsets.
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r data splitting, echo=TRUE, results=TRUE}
+
+set.seed(998)
+inBuild <- createDataPartition(data_red2$classe, p=0.7, list=FALSE)
+validation <- data_red2[-inBuild,]
+buildData <- data_red2[inBuild,]
+
+inTrain2 <- createDataPartition(buildData$classe, p=0.7, list=FALSE)
+training2 <- buildData[inTrain2,]
+testing2 <- buildData[-inTrain2,]
+
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+### 5.Pre-Processing
+
+Now we create our pre-processing control. We will use k-fold crossvalidation with 10 folds and 3 repeats.
+
+```{r preprocessing, echo=TRUE, results=TRUE}
+fitControl <- trainControl(method="repeatedcv", number=10, repeats=3, returnData = TRUE)
+
+```
+
+### 6.Model Training
+
+In this section we train our initial models. Due to the size of the training dataset and the complexity of some of the models we will utilize multiple processing cores to parallel process the model training using the doMC package. We have selected a Generalized Boosting Regression model (modelGbm), a Classification and Regression Tree model (modelCART) and a type of neural network model called Extreme Learning Machine (modelElm). Each of these models is trained using the training dataset and then all three are compared.
+
+```{r model training, echo=TRUE, results=TRUE, cache=TRUE, message=FALSE}
+
+registerDoMC(cores = 4)
+set.seed(825)
+modelGbm <- train(classe ~., data=training2, method="gbm", trControl=fitControl)
+
+set.seed(825)
+modelCART <- train(classe ~., data=training2, method="rpart", trControl=fitControl)
+
+set.seed(825)
+modelElm <- train(classe ~., data=training2, method="elm", trControl=fitControl) 
+
+```
+
+### 7.Model Measurement
+
+We create a confusion matrix for each model to ascertain each models effectiveness.
+
+```{r confusion matrix, echo=TRUE, results=TRUE, cache=TRUE}
+
+#confusion matrix modelGbm
+gbmClasses <- predict(modelGbm, newdata = testing2)
+confusionMatrix(data=gbmClasses, testing2$classe)
+
+#confusion matrix modelCART
+cartClasses <- predict(modelCART, newdata = testing2)
+confusionMatrix(data=cartClasses, testing2$classe)
+
+#confusion matrix modelElm
+elmClasses <- predict(modelElm, newdata = testing2)
+confusionMatrix(data=elmClasses, testing2$classe)
+
+
+```
+
+Next we compare the resamples from each model.
+
+```{r resamples, echo=TRUE, results=TRUE, cache=TRUE}
+
+results <- resamples(list(ELM=modelElm, GBM=modelGbm, CART=modelCART))
+
+summary(results)
+
+bwplot((results), main="Box Plot of Resample Results" ) 
+
+```
+
+```{r out of sample error, echo=FALSE, results=TRUE}
+holdGbm <- confusionMatrix(data=gbmClasses, testing2$classe)
+holdCART <- confusionMatrix(data=cartClasses, testing2$classe)
+holdElm <- confusionMatrix(data=elmClasses, testing2$classe)
+
+```
+
+Model     | Out of Sample Error
+----------|--------------------
+modelGbm  | `r 1-holdGbm$overall[1]` 
+modelCART | `r 1-holdCART$overall[1]`
+modelElm  | `r 1-holdElm$overall[1]`
+
+We can see from these charts and summary statistics that the modelGbm is the most effective at predicting the classe variable from the data sets.
+
+### 8.Model Selection
+
+Here we check our selected model (modelGbm) against the validation dataset. 
+```{r model selection, echo=TRUE, results=TRUE, message=FALSE, cache=TRUE}
+
+gbmClasses2 <- predict(modelGbm, newdata = validation)
+confusionMatrix(data=gbmClasses2, validation$classe)
+```
+```{r model parameters, echo=FALSE, results=TRUE}
+holder <- confusionMatrix(data=gbmClasses2, validation$classe)
+
+```
+
+Our selected model shows an Accuracy of `r holder$overall[1]` and a Kappa value of `r holder$overall[2]`.
+
+### 9.Conclusion
+
+Our selected model (modelGbm) a Genralised Boosting Regression model showed the highest Accuracy and Kappa score of the three models tested. The Classification and Regression Tree model and the Extreme Learning Machine both scored considerably less for Accuracy and Kappa as seen in the summary data and plot. Our selected model should be able to accurately predict the test data. 
+
+### 10. Note
+I think I've made an error in the generation of this report and not cached steps 7 and 8 resulting in the code re-running and training the model on those datasets.
+
+End of Report
